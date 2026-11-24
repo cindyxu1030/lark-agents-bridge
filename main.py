@@ -31,6 +31,8 @@ from run_control import ActiveRun, ActiveRunRegistry, stop_run
 from agent_hub import agent_context_preamble
 from agent_collab import run_agent_discussion
 from agent_routing import RoutingDecision, extract_text_for_routing, route_message_for_agent
+import catchup
+import reply_context
 from reserved_commands import is_reserved_for_codex
 
 # ── 看门狗：检测休眠唤醒 + 健康日志 ─────────────────────────
@@ -216,6 +218,7 @@ async def handle_message_from_cli(evt: dict):
         content = msg.get("content", "")
         mentions = msg.get("mentions", [])
         root_id = msg.get("root_id", msg.get("parent_id", ""))
+        parent_id = msg.get("parent_id", "") or root_id
         thread_id = msg.get("thread_id", "")
     else:
         # compact 格式
@@ -227,6 +230,7 @@ async def handle_message_from_cli(evt: dict):
         content = evt.get("content", "")
         mentions = evt.get("mentions", [])
         root_id = evt.get("root_id", evt.get("parent_id", ""))
+        parent_id = evt.get("parent_id", "") or root_id
         thread_id = evt.get("thread_id", "")
 
     if not user_id or not message_id:
@@ -267,7 +271,7 @@ async def handle_message_from_cli(evt: dict):
     if is_group and topic_id:
         chat_id = f"{chat_id}:{topic_id}"
 
-    print(f"[收到消息] type={msg_type} chat={chat_type}" + (f" topic={topic_id[:16]}" if topic_id else ""), flush=True)
+    print(("[catchup 补收] " if evt.get("_catchup") else "[收到消息] ") + f"type={msg_type} chat={chat_type}" + (f" topic={topic_id[:16]}" if topic_id else ""), flush=True)
     print(f"[Chat Info] user={user_id} chat={chat_id} is_group={is_group}", flush=True)
 
     # 解析 content（可能是 JSON 字符串）
@@ -316,6 +320,7 @@ async def handle_message_from_cli(evt: dict):
             await _process_message_cli(
                 user_id, chat_id, is_group, msg_type, content,
                 message_id, mentions, raw_oc_chat_id, route_decision,
+                reply_meta={"parent_id": parent_id or "", "root_id": root_id or "", "thread_id": thread_id or ""},
             )
         except Exception as e:
             print(f"[error] 消息处理异常: {type(e).__name__}: {e}", flush=True)
@@ -326,6 +331,7 @@ async def handle_message_from_cli(evt: dict):
 async def _process_message_cli(
     user_id, chat_id, is_group, msg_type, content, message_id, mentions,
     raw_oc_chat_id="", route_decision: RoutingDecision | None = None,
+    reply_meta: dict | None = None,
 ):
     """处理消息内容"""
     print(f"[处理消息] user={user_id[:8]}... chat={chat_id[:8]}... is_group={is_group}", flush=True)
@@ -522,6 +528,17 @@ async def _process_message_cli(
         print(f"[跳过] 不支持的消息类型: {msg_type}", flush=True)
         return
 
+    # ── 跨 bot 辩论触发（人类消息同时 @ 两个 bot + /debate）────
+    if is_group:
+        from debate import parse_debate_trigger, run_debate
+        debate = parse_debate_trigger(text, mentions)
+        if debate:
+            mode, topic, self_first = debate
+            print(f"[debate] 触发 mode={mode} topic={topic[:50]} self_first={self_first}", flush=True)
+            api_chat_id = raw_oc_chat_id or chat_id.split(":")[0]
+            asyncio.create_task(run_debate(api_chat_id, topic, self_first, feishu, mode=mode))
+            return
+
     # ── 斜杠命令 ──────────────────────────────────────────────
     parsed = parse_command(text)
     if parsed and not config.is_owner(user_id):
@@ -581,7 +598,22 @@ async def _process_message_cli(
             pass
         return
 
-    await _run_and_display(user_id, chat_id, is_group, text, card_msg_id, session, message_id)
+    # 引用 / 话题回复：事件里只有消息 ID，这里把被引用的消息和话题历史拉回来
+    reply_ctx = None
+    if reply_meta and (reply_meta.get("parent_id") or reply_meta.get("thread_id")):
+        try:
+            reply_ctx = await asyncio.wait_for(
+                reply_context.build(
+                    user_id=user_id, chat_key=chat_id, message_id=message_id,
+                    chat_id=raw_oc_chat_id, fresh_session=not session.session_id,
+                    exclude_ids=(card_msg_id,), **reply_meta,
+                ),
+                timeout=40,
+            )
+        except Exception as e:
+            print(f"[reply ctx] 获取失败，按无上下文继续: {type(e).__name__}: {e}", flush=True)
+
+    await _run_and_display(user_id, chat_id, is_group, text, card_msg_id, session, message_id, reply_ctx=reply_ctx)
 
 
 # ── 卡片按钮回调处理 ─────────────────────────────────────────
@@ -884,6 +916,7 @@ async def handle_card_action_from_cli(evt: dict):
 async def _run_and_display(
     user_id: str, chat_id: str, is_group: bool,
     text: str, card_msg_id: str, session, notify_msg_id: str,
+    reply_ctx: "reply_context.ReplyContext | None" = None,
 ):
     """调用 Claude 并流式展示结果，检测选项时附加按钮。"""
     active_run = _active_runs.start_run(user_id, card_msg_id, chat_id=chat_id)
@@ -969,21 +1002,42 @@ async def _run_and_display(
         print(f"[run_claude] 开始调用...", flush=True)
         hub_preamble = agent_context_preamble(session.cwd)
         claude_message = f"{hub_preamble}{text}" if hub_preamble else text
+        if reply_ctx and reply_ctx.text:
+            claude_message = f"{hub_preamble}{reply_ctx.text}{text}"
         is_guest = not config.is_owner(user_id)
         if is_guest:
             print(f"[guest] 受限模式 user={user_id} cwd={config.GUEST_CWD}", flush=True)
+        # Owner 私聊：bypassPermissions + 独立配置目录（全盘访问）。
+        # 群聊（含 owner 在群里）和访客保持 scoped 沙箱。plan 模式不覆盖。
+        is_owner_dm = not is_group and not is_guest
+        effective_permission_mode = session.permission_mode
+        if is_owner_dm and session.permission_mode != "plan":
+            effective_permission_mode = "bypassPermissions"
+        elif is_group and session.permission_mode == "bypassPermissions":
+            # 群聊永远不放行 bypass —— 沙箱 deny 只盖住部分路径，
+            # bypass 会绕过 additionalDirectories 的读取限制。
+            effective_permission_mode = "default"
+        if is_owner_dm:
+            print(f"[owner-dm] 全盘模式 config={config.OWNER_DM_CONFIG_DIR}", flush=True)
+        # Owner 默认模型：仅当 session 还在 DEFAULT_MODEL（未被 /model 显式覆盖）时生效
+        effective_model = session.model
+        if not is_guest and config.OWNER_MODEL and session.model == config.DEFAULT_MODEL:
+            effective_model = config.OWNER_MODEL
         full_text, new_session_id, used_fresh_session_fallback = await run_claude(
             message=claude_message,
             session_id=session.session_id,
-            model=session.model,
+            model=effective_model,
             cwd=config.GUEST_CWD if is_guest else session.cwd,
-            permission_mode=session.permission_mode,
+            permission_mode=effective_permission_mode,
             allowed_tools=config.GUEST_ALLOWED_TOOLS if is_guest else None,
+            config_dir=config.OWNER_DM_CONFIG_DIR if is_owner_dm else None,
             on_text_chunk=on_text_chunk,
             on_tool_use=on_tool_use,
             on_process_start=lambda proc: _active_runs.attach_process(user_id, proc, chat_id=chat_id),
         )
         print(f"[run_claude] 完成, session={new_session_id}", flush=True)
+        if reply_ctx:
+            reply_ctx.commit()
     except Exception as e:
         if active_run.stop_requested:
             return
@@ -1024,8 +1078,10 @@ async def _run_and_display(
         await store.on_claude_response(user_id, chat_id, new_session_id, text)
 
     if plan_exited and session.permission_mode == "plan":
-        print(f"[Plan] ExitPlanMode 检测到，切换为 bypassPermissions", flush=True)
-        await store.set_permission_mode(user_id, chat_id, "bypassPermissions")
+        # 群聊回到 default（沙箱模式），只有私聊才回 bypassPermissions
+        next_mode = "default" if is_group else "bypassPermissions"
+        print(f"[Plan] ExitPlanMode 检测到，切换为 {next_mode}", flush=True)
+        await store.set_permission_mode(user_id, chat_id, next_mode)
         try:
             notice = "🚀 已退出规划模式，发送任意消息开始执行。"
             if is_group and notify_msg_id:
@@ -1389,6 +1445,7 @@ async def run_lark_cli_loop():
     child_env["LARKSUITE_CLI_BRAND"] = os.getenv("LARKSUITE_CLI_BRAND", "lark")
 
     _consecutive_failures = 0
+    _safe_create_task(catchup.periodic_loop(handle_message_from_cli))
 
     while True:
         print("[lark-cli] 启动事件订阅...", flush=True)
@@ -1444,6 +1501,7 @@ async def run_lark_cli_loop():
 
             _consecutive_failures = 0
             print("[lark-cli] ✅ 事件订阅已连接", flush=True)
+            _safe_create_task(catchup.run_once(handle_message_from_cli, "connected"))
             await _event_reader(proc)
 
         except Exception as e:

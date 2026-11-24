@@ -8,7 +8,7 @@ import json
 import os
 from typing import Callable, Optional
 
-from bot_config import PERMISSION_MODE, CLAUDE_CLI
+from bot_config import PERMISSION_MODE, CLAUDE_CLI, CLAUDE_CONFIG_DIR
 
 IDLE_TIMEOUT = 900  # 15 分钟无任何输出视为挂死
 
@@ -42,6 +42,7 @@ async def run_claude(
     cwd: Optional[str] = None,
     permission_mode: Optional[str] = None,
     allowed_tools: Optional[list[str]] = None,
+    config_dir: Optional[str] = None,
     on_text_chunk: Optional[Callable[[str], None]] = None,
     on_tool_use: Optional[Callable[[str, dict], None]] = None,
     on_process_start: Optional[Callable[[asyncio.subprocess.Process], None]] = None,
@@ -64,10 +65,12 @@ async def run_claude(
         # allowed_tools 非 None = 访客模式：不跳过权限门禁，只放行白名单工具，
         # 其余工具在 --print 模式下无法弹确认框，自动被拒。
         if allowed_tools is None:
-            cmd += [
-                "--dangerously-skip-permissions",
-                "--permission-mode", permission_mode or PERMISSION_MODE,
-            ]
+            mode = permission_mode or PERMISSION_MODE
+            cmd += ["--permission-mode", mode]
+            # 只有显式 bypassPermissions 才跳过门禁；default 模式依赖
+            # settings.json 的 allow/deny 规则（未放行的调用在 --print 下自动被拒）。
+            if mode == "bypassPermissions":
+                cmd += ["--dangerously-skip-permissions"]
         else:
             cmd += [
                 "--permission-mode", "default",
@@ -80,6 +83,9 @@ async def run_claude(
 
         env = os.environ.copy()
         env.pop("CLAUDECODE", None)
+        effective_config_dir = config_dir or CLAUDE_CONFIG_DIR
+        if effective_config_dir:
+            env["CLAUDE_CONFIG_DIR"] = effective_config_dir
 
         proc = await asyncio.create_subprocess_exec(
             *cmd,

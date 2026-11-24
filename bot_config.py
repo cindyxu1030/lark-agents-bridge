@@ -32,6 +32,14 @@ DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "claude-opus-4-6")
 DEFAULT_CWD = os.path.expanduser(os.getenv("DEFAULT_CWD", "~"))
 PERMISSION_MODE = os.getenv("PERMISSION_MODE", "bypassPermissions")
 
+# 独立的 Claude 配置目录（scoped：只带工作相关的 CLAUDE.md / skills / 权限规则）。
+# 设为空字符串 = 沿用默认 ~/.claude（不隔离）。
+CLAUDE_CONFIG_DIR = os.path.expanduser(os.getenv("CLAUDE_CONFIG_DIR", "~/.claude-lark"))
+
+# Owner DM（owner 私聊）专用配置目录：bypassPermissions + 全盘访问。
+# 群聊 / 访客仍走 CLAUDE_CONFIG_DIR 的 scoped 沙箱（2026-08-26）。
+OWNER_DM_CONFIG_DIR = os.path.expanduser(os.getenv("OWNER_DM_CONFIG_DIR", "~/.claude-lark-dm"))
+
 SESSIONS_DIR = os.path.expanduser(os.getenv("SESSIONS_DIR", "~/.lark-claude"))
 PROJECTS_ROOT = os.path.expanduser(os.getenv("PROJECTS_ROOT", "~/projects"))
 AGENT_HUB_ROOT = os.path.expanduser(os.getenv("AGENT_HUB_ROOT", os.path.join(PROJECTS_ROOT, "_agent-hub")))
@@ -55,6 +63,19 @@ def is_owner(open_id: str) -> bool:
 
 # 群聊里是否只在被 @ 时回复（默认开）。设 GROUP_REQUIRE_MENTION=false 恢复全量回复。
 GROUP_REQUIRE_MENTION = os.getenv("GROUP_REQUIRE_MENTION", "true").strip().lower() in ("1", "true", "yes")
+
+# Owner 消息的默认模型（未用 /model 显式切换时生效）。留空 = 跟随 DEFAULT_MODEL。
+OWNER_MODEL = os.getenv("OWNER_MODEL", "").strip()
+
+# 跨 bot 辩论（/debate）。对端 bot 的 app_id（群历史里的 sender id）和显示名。
+# 两者都配置后 /debate 才启用。
+DEBATE_PEER_APP_IDS = [v.strip() for v in os.getenv("DEBATE_PEER_APP_IDS", "").split(",") if v.strip()]
+DEBATE_PEER_NAMES = [v.strip() for v in os.getenv("DEBATE_PEER_NAMES", "").split(",") if v.strip()]
+SELF_BOT_NAMES = [v.strip() for v in os.getenv("BOT_SELF_ALIASES", "").split(",") if v.strip()]
+DEBATE_MAX_ROUNDS = int(os.getenv("DEBATE_MAX_ROUNDS", "3"))
+DEBATE_POLL_SECONDS = int(os.getenv("DEBATE_POLL_SECONDS", "8"))
+DEBATE_TURN_TIMEOUT = int(os.getenv("DEBATE_TURN_TIMEOUT", "300"))
+DEBATE_MODEL = os.getenv("DEBATE_MODEL", "").strip()
 
 
 BOT_MENTION_OPEN_IDS = [v.strip() for v in os.getenv("BOT_MENTION_OPEN_IDS", "").split(",") if v.strip()]
