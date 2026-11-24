@@ -18,9 +18,9 @@
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>/Users/cindy/.npm-global/bin:/Users/cindy/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+        <string>/Users/YOURNAME/.npm-global/bin:/Users/YOURNAME/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
         <key>HOME</key>
-        <string>/Users/cindy</string>
+        <string>/Users/YOURNAME</string>
         <key>PYTHONUNBUFFERED</key>
         <string>1</string>
     </dict>

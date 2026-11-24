@@ -50,7 +50,7 @@ This fork has been **tested end-to-end on Lark international** (larksuite.com). 
 #### Install & run
 
 ```bash
-git clone https://github.com/cindyxu1030/lark-claudecode-bridge.git
+git clone https://github.com/YOUR_GITHUB_USER/lark-claudecode-bridge.git
 cd lark-claudecode-bridge
 
 python3 -m venv .venv
@@ -260,7 +260,7 @@ To let the bot read/write your calendar, send mail, etc. via Lark APIs, install 
 #### 安装与启动
 
 ```bash
-git clone https://github.com/cindyxu1030/lark-claudecode-bridge.git
+git clone https://github.com/YOUR_GITHUB_USER/lark-claudecode-bridge.git
 cd lark-claudecode-bridge
 
 python3 -m venv .venv
@@ -404,7 +404,7 @@ launchctl unload ~/Library/LaunchAgents/com.YOURNAME.lark-claude.plist  # 停服
 
 ## Credits
 
-Forked from [joewongjc/feishu-claude-code](https://github.com/joewongjc/feishu-claude-code) by Jonathan. Maintained by Cindy Xu.
+Forked from [joewongjc/feishu-claude-code](https://github.com/joewongjc/feishu-claude-code) by Jonathan. Maintained by the lark-claudecode-bridge contributors.
 
 ## License
 
